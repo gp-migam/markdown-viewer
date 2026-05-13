@@ -308,6 +308,31 @@
     font-size: 1em;
   }
 
+  /* Copy button on fenced code blocks */
+  .copy-btn {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 30px;
+    padding: 0;
+    background: color-mix(in srgb, var(--bg-elev) 85%, transparent);
+    color: var(--muted);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity .15s, color .15s, border-color .15s, background .15s;
+  }
+  .content pre:hover .copy-btn,
+  .copy-btn:focus-visible { opacity: 1; }
+  .copy-btn:hover { color: var(--accent); border-color: var(--accent); }
+  .copy-btn.copied { color: var(--accent); border-color: var(--accent); }
+  .copy-btn svg { width: 16px; height: 16px; }
+
   /* Task list */
   .content input[type="checkbox"] {
     margin-right: 6px;
@@ -455,9 +480,54 @@
         el.dataset.highlighted = 'yes';
       }
     });
+    addCopyButtons();
     fnameEl.textContent = name || '';
     document.title = name ? `${name} — Markdown Viewer` : 'Markdown Viewer';
     view.scrollTop = 0;
+  }
+
+  /* ---------- Copy buttons on fenced code blocks ---------- */
+  const COPY_SVG  = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>';
+  const CHECK_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
+
+  function addCopyButtons() {
+    content.querySelectorAll('pre > code').forEach(codeEl => {
+      const pre = codeEl.parentElement;
+      if (pre.querySelector(':scope > .copy-btn')) return;
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'copy-btn';
+      btn.title = 'Copy to clipboard';
+      btn.setAttribute('aria-label', 'Copy code to clipboard');
+      btn.innerHTML = COPY_SVG;
+      btn.addEventListener('click', async () => {
+        const text = codeEl.innerText;
+        try {
+          if (navigator.clipboard && window.isSecureContext) {
+            await navigator.clipboard.writeText(text);
+          } else {
+            const ta = document.createElement('textarea');
+            ta.value = text;
+            ta.setAttribute('readonly', '');
+            ta.style.position = 'fixed';
+            ta.style.opacity = '0';
+            document.body.appendChild(ta);
+            ta.select();
+            document.execCommand('copy');
+            document.body.removeChild(ta);
+          }
+          btn.classList.add('copied');
+          btn.innerHTML = CHECK_SVG;
+          setTimeout(() => {
+            btn.classList.remove('copied');
+            btn.innerHTML = COPY_SVG;
+          }, 1400);
+        } catch {
+          toast('Copy failed');
+        }
+      });
+      pre.appendChild(btn);
+    });
   }
 
   /* ---------- File handling ---------- */
@@ -615,6 +685,12 @@ class Point:
 
     def norm(self) -> float:
         return (self.x ** 2 + self.y ** 2) ** 0.5
+\`\`\`
+
+\`\`\`bash
+# Hover any code block — a copy button appears in the top-right corner
+curl -fsSL https://example.com/install.sh | bash
+echo "done"
 \`\`\`
 
 ## A table
