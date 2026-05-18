@@ -1,4 +1,4 @@
-const CACHE = 'mdviewer-v2';
+const CACHE = 'mdviewer-v3';
 const ASSETS = [
   './',
   './index.html',

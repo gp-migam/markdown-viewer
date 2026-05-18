@@ -98,10 +98,13 @@
   .app {
     display: grid;
     grid-template-rows: auto 1fr;
+    grid-template-columns: auto 1fr;
     height: 100vh;
+    position: relative;
   }
 
   header.bar {
+    grid-column: 1 / -1;
     display: flex;
     align-items: center;
     gap: 14px;
@@ -110,6 +113,95 @@
     border-bottom: 1px solid var(--border);
     z-index: 5;
   }
+
+  .icon-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    height: 34px;
+    padding: 0;
+    background: transparent;
+    color: var(--fg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    cursor: pointer;
+    transition: background .15s, border-color .15s, color .15s, opacity .15s;
+  }
+  .icon-btn:hover { color: var(--accent); border-color: var(--accent); }
+  .icon-btn:disabled { opacity: .4; cursor: default; }
+  .icon-btn:disabled:hover { color: var(--fg); border-color: var(--border); }
+  .icon-btn svg { width: 18px; height: 18px; }
+
+  /* ---------- Sidebar (TOC) ---------- */
+  aside.toc {
+    width: 280px;
+    background: var(--bg-elev);
+    border-right: 1px solid var(--border);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    transition: width .2s ease;
+    min-width: 0;
+  }
+  aside.toc.collapsed {
+    width: 0;
+    border-right-width: 0;
+  }
+  aside.toc .toc-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 14px 16px 10px;
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    flex-shrink: 0;
+  }
+  aside.toc .toc-list {
+    list-style: none;
+    margin: 0;
+    padding: 0 6px 16px;
+    overflow-y: auto;
+    flex: 1;
+  }
+  aside.toc .toc-list li { margin: 0; }
+  aside.toc .toc-list a {
+    display: block;
+    padding: 5px 10px;
+    border-radius: 6px;
+    color: var(--fg);
+    text-decoration: none;
+    font-size: 13.5px;
+    line-height: 1.4;
+    border-left: 2px solid transparent;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    transition: background .12s, color .12s, border-color .12s;
+  }
+  aside.toc .toc-list a:hover {
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+    color: var(--accent);
+  }
+  aside.toc .toc-list a.active {
+    background: color-mix(in srgb, var(--accent) 14%, transparent);
+    color: var(--accent);
+    border-left-color: var(--accent);
+  }
+  aside.toc .toc-list .toc-h1 { padding-left: 4px; font-weight: 600; }
+  aside.toc .toc-list .toc-h2 { padding-left: 16px; }
+  aside.toc .toc-list .toc-h3 { padding-left: 30px; font-size: 13px; }
+  aside.toc .toc-list .toc-h4 { padding-left: 44px; font-size: 12.5px; color: var(--muted); }
+  aside.toc .toc-list .toc-h5 { padding-left: 58px; font-size: 12px; color: var(--muted); }
+  aside.toc .toc-list .toc-h6 { padding-left: 72px; font-size: 12px; color: var(--muted); }
+  aside.toc .toc-list::-webkit-scrollbar { width: 8px; }
+  aside.toc .toc-list::-webkit-scrollbar-thumb {
+    background: var(--border); border-radius: 8px;
+  }
+  aside.toc .toc-list::-webkit-scrollbar-thumb:hover { background: var(--muted); }
   .brand {
     display: flex; align-items: center; gap: 10px;
     font-weight: 700; letter-spacing: .2px;
@@ -379,12 +471,20 @@
     .filename { display: none; }
     main.view { padding: 24px 16px 60px; }
     .content { font-size: 15px; }
+    aside.toc { width: 240px; position: absolute; top: 0; bottom: 0; z-index: 4; box-shadow: var(--shadow); }
+    aside.toc.collapsed { width: 0; }
   }
 </style>
 </head>
 <body data-theme="dracula">
   <div class="app">
     <header class="bar">
+      <button id="toc-toggle" class="icon-btn" type="button" title="Toggle outline (Ctrl+B)" aria-label="Toggle outline" aria-expanded="true" aria-controls="toc" disabled>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <rect x="3" y="4" width="18" height="16" rx="2"/>
+          <line x1="9" y1="4" x2="9" y2="20"/>
+        </svg>
+      </button>
       <div class="brand">
         <span class="dot" aria-hidden="true"></span>
         <span>Markdown Viewer</span>
@@ -411,6 +511,11 @@
       </div>
     </header>
 
+    <aside class="toc collapsed" id="toc" aria-label="Table of contents">
+      <div class="toc-header">Outline</div>
+      <ul class="toc-list" id="toc-list"></ul>
+    </aside>
+
     <main class="view" id="view">
       <div id="content" class="content"></div>
     </main>
@@ -435,6 +540,9 @@
   const themeEl  = $('theme');
   const fnameEl  = $('filename');
   const toastEl  = $('toast');
+  const tocEl       = $('toc');
+  const tocListEl   = $('toc-list');
+  const tocToggleEl = $('toc-toggle');
 
   /* ---------- Marked + highlight.js setup ---------- */
   marked.setOptions({
@@ -466,7 +574,7 @@
   function render(md, name) {
     const html = marked.parse(md);
     content.innerHTML = DOMPurify.sanitize(html, {
-      ADD_ATTR: ['target', 'rel'],
+      ADD_ATTR: ['target', 'rel', 'id'],
     });
     // Open external links in new tab
     content.querySelectorAll('a[href^="http"]').forEach(a => {
@@ -481,10 +589,103 @@
       }
     });
     addCopyButtons();
+    buildToc();
     fnameEl.textContent = name || '';
     document.title = name ? `${name} — Markdown Viewer` : 'Markdown Viewer';
     view.scrollTop = 0;
   }
+
+  /* ---------- Table of contents ---------- */
+  const TOC_COLLAPSED_KEY = 'mdviewer.tocCollapsed';
+  let tocObserver = null;
+
+  function slugify(text, used) {
+    let base = String(text).toLowerCase().trim()
+      .replace(/[^\p{L}\p{N}\s-]/gu, '')
+      .replace(/\s+/g, '-')
+      .replace(/-+/g, '-')
+      .replace(/^-|-$/g, '');
+    if (!base) base = 'section';
+    let slug = base, i = 1;
+    while (used.has(slug)) slug = `${base}-${++i}`;
+    used.add(slug);
+    return slug;
+  }
+
+  function buildToc() {
+    if (tocObserver) { tocObserver.disconnect(); tocObserver = null; }
+    tocListEl.innerHTML = '';
+    const headings = content.querySelectorAll('h1, h2, h3, h4, h5, h6');
+    if (!headings.length) {
+      tocToggleEl.disabled = true;
+      setTocCollapsed(true, { persist: false });
+      return;
+    }
+    tocToggleEl.disabled = false;
+
+    const used = new Set();
+    const frag = document.createDocumentFragment();
+    headings.forEach(h => {
+      if (!h.id) h.id = slugify(h.textContent, used);
+      else used.add(h.id);
+      const li = document.createElement('li');
+      const a = document.createElement('a');
+      a.href = `#${h.id}`;
+      a.textContent = h.textContent;
+      a.className = `toc-${h.tagName.toLowerCase()}`;
+      a.dataset.target = h.id;
+      a.addEventListener('click', (e) => {
+        e.preventDefault();
+        h.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        setActiveTocLink(a);
+      });
+      li.appendChild(a);
+      frag.appendChild(li);
+    });
+    tocListEl.appendChild(frag);
+
+    // Restore collapsed preference (default expanded when we have headings)
+    const stored = localStorage.getItem(TOC_COLLAPSED_KEY);
+    setTocCollapsed(stored === '1', { persist: false });
+
+    // Scrollspy
+    const linkById = new Map(
+      Array.from(tocListEl.querySelectorAll('a')).map(a => [a.dataset.target, a])
+    );
+    tocObserver = new IntersectionObserver((entries) => {
+      const visible = entries
+        .filter(en => en.isIntersecting)
+        .sort((a, b) => a.target.offsetTop - b.target.offsetTop);
+      if (visible.length) {
+        const id = visible[0].target.id;
+        const link = linkById.get(id);
+        if (link) setActiveTocLink(link);
+      }
+    }, { root: view, rootMargin: '0px 0px -75% 0px', threshold: 0 });
+    headings.forEach(h => tocObserver.observe(h));
+  }
+
+  function setActiveTocLink(link) {
+    tocListEl.querySelectorAll('a.active').forEach(a => a.classList.remove('active'));
+    link.classList.add('active');
+    // Keep active link in view inside the sidebar
+    const listRect = tocListEl.getBoundingClientRect();
+    const linkRect = link.getBoundingClientRect();
+    if (linkRect.top < listRect.top || linkRect.bottom > listRect.bottom) {
+      link.scrollIntoView({ block: 'nearest' });
+    }
+  }
+
+  function setTocCollapsed(collapsed, { persist = true } = {}) {
+    tocEl.classList.toggle('collapsed', collapsed);
+    tocToggleEl.setAttribute('aria-expanded', String(!collapsed));
+    if (persist) localStorage.setItem(TOC_COLLAPSED_KEY, collapsed ? '1' : '0');
+  }
+
+  tocToggleEl.addEventListener('click', () => {
+    if (tocToggleEl.disabled) return;
+    setTocCollapsed(!tocEl.classList.contains('collapsed'));
+  });
 
   /* ---------- Copy buttons on fenced code blocks ---------- */
   const COPY_SVG  = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>';
@@ -734,6 +935,11 @@ Made for reading. Pick a theme above and drop a file in.
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'o') {
       e.preventDefault();
       fileEl.click();
+    }
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'b') {
+      if (tocToggleEl.disabled) return;
+      e.preventDefault();
+      setTocCollapsed(!tocEl.classList.contains('collapsed'));
     }
   });
 })();
