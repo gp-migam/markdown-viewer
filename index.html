@@ -8,9 +8,15 @@
 <link rel="manifest" href="./manifest.json" />
 <link rel="icon" href="./icon-192.png" type="image/png" />
 <link rel="apple-touch-icon" href="./icon-192.png" />
-<script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/highlight.js@11.10.0/lib/highlight.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"
+        integrity="sha384-/TQbtLCAerC3jgaim+N78RZSDYV7ryeoBCVqTuzRrFec2akfBkHS7ACQ3PQhvMVi"
+        crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"
+        integrity="sha384-+VfUPEb0PdtChMwmBcBmykRMDd+v6D/oFmB3rZM/puCMDYcIvF968OimRh4KQY9a"
+        crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11.10.0/highlight.min.js"
+        integrity="sha384-GdEWAbCjn+ghjX0gLx7/N1hyTVmPAjdC2OvoAA0RyNcAOhqwtT8qnbCxWle2+uJX"
+        crossorigin="anonymous"></script>
 <style>
   :root {
     --bg: #1e1f29;
@@ -468,11 +474,105 @@
 
   @media (max-width: 640px) {
     header.bar { padding: 8px 12px; gap: 8px; flex-wrap: wrap; }
-    .filename { display: none; }
+    .filename, .docstats { display: none; }
     main.view { padding: 24px 16px 60px; }
     .content { font-size: 15px; }
     aside.toc { width: 240px; position: absolute; top: 0; bottom: 0; z-index: 4; box-shadow: var(--shadow); }
     aside.toc.collapsed { width: 0; }
+  }
+
+  /* ---------- Doc stats (header) ---------- */
+  .docstats {
+    color: var(--muted);
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+
+  /* ---------- Help modal ---------- */
+  .modal-backdrop {
+    position: fixed; inset: 0;
+    background: color-mix(in srgb, #000 55%, transparent);
+    z-index: 150;
+    display: none;
+    align-items: center; justify-content: center;
+    padding: 24px;
+  }
+  .modal-backdrop.show { display: flex; }
+  .modal {
+    background: var(--bg-elev);
+    color: var(--fg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    max-width: 480px;
+    width: 100%;
+    padding: 22px 26px 18px;
+    font-size: 14px;
+  }
+  .modal h2 {
+    margin: 0 0 14px;
+    font-size: 16px;
+    font-weight: 700;
+    letter-spacing: .02em;
+  }
+  .modal dl {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    column-gap: 16px;
+    row-gap: 8px;
+    margin: 0 0 16px;
+  }
+  .modal dt {
+    font-family: var(--mono);
+    color: var(--accent);
+    white-space: nowrap;
+  }
+  .modal dd { margin: 0; color: var(--fg); }
+  .modal .row { display: flex; justify-content: flex-end; }
+  .modal button {
+    background: transparent;
+    color: var(--fg);
+    border: 1px solid var(--border);
+    padding: 6px 14px;
+    border-radius: var(--radius);
+    cursor: pointer;
+    font: inherit; font-size: 13px;
+    transition: background .15s, border-color .15s, color .15s;
+  }
+  .modal button:hover { border-color: var(--accent); color: var(--accent); }
+  .modal button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+  /* ---------- Print ---------- */
+  @media print {
+    body, body[data-theme] {
+      --bg: #ffffff; --bg-elev: #f6f8fa; --fg: #1f2328; --muted: #656d76;
+      --accent: #0969da; --accent-2: #cf222e; --border: #d0d7de;
+      --code-bg: #f6f8fa; --link: #0969da; --quote: #656d76; --selection: #bfdcff;
+      --shadow: none;
+      overflow: visible;
+      background: #ffffff;
+      color: #1f2328;
+    }
+    header.bar, aside.toc, .toast, .drop-overlay, .copy-btn, .modal-backdrop { display: none !important; }
+    .app { display: block; height: auto; }
+    main.view { overflow: visible; padding: 0; height: auto; }
+    .content { max-width: none; font-size: 11pt; line-height: 1.55; }
+    .content pre, .content blockquote, .content table, .content img {
+      break-inside: avoid;
+      page-break-inside: avoid;
+      box-shadow: none;
+    }
+    .content h1, .content h2, .content h3 {
+      break-after: avoid;
+      page-break-after: avoid;
+    }
+    .content a[href^="http"]::after {
+      content: " (" attr(href) ")";
+      color: #555;
+      font-size: .85em;
+      word-break: break-all;
+    }
   }
 </style>
 </head>
@@ -491,6 +591,7 @@
         <small>drag &middot; drop &middot; read</small>
       </div>
       <span class="filename" id="filename"></span>
+      <span class="docstats" id="docstats" aria-live="polite"></span>
       <span class="spacer"></span>
       <div class="controls">
         <select id="theme" title="Color scheme">
@@ -530,6 +631,23 @@
 
   <div class="toast" id="toast"></div>
 
+  <div class="modal-backdrop" id="help" role="dialog" aria-modal="true" aria-labelledby="help-title" aria-hidden="true">
+    <div class="modal">
+      <h2 id="help-title">Keyboard shortcuts</h2>
+      <dl>
+        <dt>Ctrl+O</dt><dd>Open file</dd>
+        <dt>Ctrl+B</dt><dd>Toggle outline</dd>
+        <dt>Ctrl+V</dt><dd>Render clipboard as markdown</dd>
+        <dt>?</dt><dd>Show this help</dd>
+        <dt>Esc</dt><dd>Close this dialog</dd>
+        <dt>Drop</dt><dd>Drag a markdown file onto the window</dd>
+      </dl>
+      <div class="row">
+        <button type="button" id="help-close">Close</button>
+      </div>
+    </div>
+  </div>
+
 <script>
 (() => {
   const $ = (id) => document.getElementById(id);
@@ -539,10 +657,13 @@
   const fileEl   = $('file');
   const themeEl  = $('theme');
   const fnameEl  = $('filename');
+  const statsEl  = $('docstats');
   const toastEl  = $('toast');
   const tocEl       = $('toc');
   const tocListEl   = $('toc-list');
   const tocToggleEl = $('toc-toggle');
+  const helpEl       = $('help');
+  const helpCloseEl  = $('help-close');
 
   /* ---------- Marked + highlight.js setup ---------- */
   marked.setOptions({
@@ -562,7 +683,10 @@
 
   /* ---------- Theme persistence ---------- */
   const STORAGE_KEY = 'mdviewer.theme';
-  const savedTheme = localStorage.getItem(STORAGE_KEY) || 'dracula';
+  const prefersLight = window.matchMedia &&
+    window.matchMedia('(prefers-color-scheme: light)').matches;
+  const savedTheme = localStorage.getItem(STORAGE_KEY) ||
+    (prefersLight ? 'github-light' : 'dracula');
   document.body.dataset.theme = savedTheme;
   themeEl.value = savedTheme;
   themeEl.addEventListener('change', (e) => {
@@ -571,6 +695,8 @@
   });
 
   /* ---------- Render ---------- */
+  let highlightObserver = null;
+
   function render(md, name) {
     const html = marked.parse(md);
     content.innerHTML = DOMPurify.sanitize(html, {
@@ -581,18 +707,38 @@
       a.target = '_blank';
       a.rel = 'noopener noreferrer';
     });
-    // Highlight any pre>code that wasn't already highlighted (e.g., no lang fence)
-    content.querySelectorAll('pre code').forEach(el => {
-      if (!el.dataset.highlighted) {
-        try { hljs.highlightElement(el); } catch {}
-        el.dataset.highlighted = 'yes';
-      }
+    // Blocks marked.highlight already processed at parse time carry the .hljs class.
+    content.querySelectorAll('pre code.hljs').forEach(el => {
+      el.dataset.highlighted = 'yes';
     });
+    // Lazy-highlight any remaining blocks (e.g., no-lang fences) as they enter viewport.
+    if (highlightObserver) { highlightObserver.disconnect(); highlightObserver = null; }
+    const pending = content.querySelectorAll('pre code:not([data-highlighted])');
+    if (pending.length) {
+      highlightObserver = new IntersectionObserver((entries, obs) => {
+        for (const en of entries) {
+          if (!en.isIntersecting) continue;
+          try { hljs.highlightElement(en.target); } catch {}
+          en.target.dataset.highlighted = 'yes';
+          obs.unobserve(en.target);
+        }
+      }, { rootMargin: '200px 0px' });
+      pending.forEach(el => highlightObserver.observe(el));
+    }
     addCopyButtons();
     buildToc();
     fnameEl.textContent = name || '';
+    updateDocStats();
     document.title = name ? `${name} — Markdown Viewer` : 'Markdown Viewer';
     view.scrollTop = 0;
+  }
+
+  function updateDocStats() {
+    const text = content.innerText || '';
+    const words = (text.match(/\S+/g) || []).length;
+    if (!words) { statsEl.textContent = ''; return; }
+    const minutes = Math.max(1, Math.round(words / 200));
+    statsEl.textContent = `${words.toLocaleString()} words · ${minutes} min`;
   }
 
   /* ---------- Table of contents ---------- */
@@ -930,16 +1076,45 @@ Made for reading. Pick a theme above and drop a file in.
     }
   });
 
+  /* ---------- Help modal ---------- */
+  function isEditableTarget(el) {
+    if (!el) return false;
+    const tag = el.tagName;
+    return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable;
+  }
+  function showHelp() {
+    helpEl.classList.add('show');
+    helpEl.setAttribute('aria-hidden', 'false');
+    helpCloseEl.focus();
+  }
+  function hideHelp() {
+    helpEl.classList.remove('show');
+    helpEl.setAttribute('aria-hidden', 'true');
+  }
+  helpCloseEl.addEventListener('click', hideHelp);
+  helpEl.addEventListener('click', (e) => { if (e.target === helpEl) hideHelp(); });
+
   /* ---------- Keyboard ---------- */
   window.addEventListener('keydown', (e) => {
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'o') {
       e.preventDefault();
       fileEl.click();
+      return;
     }
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'b') {
       if (tocToggleEl.disabled) return;
       e.preventDefault();
       setTocCollapsed(!tocEl.classList.contains('collapsed'));
+      return;
+    }
+    if (e.key === 'Escape' && helpEl.classList.contains('show')) {
+      e.preventDefault();
+      hideHelp();
+      return;
+    }
+    if (e.key === '?' && !e.ctrlKey && !e.metaKey && !e.altKey && !isEditableTarget(e.target)) {
+      e.preventDefault();
+      if (helpEl.classList.contains('show')) hideHelp(); else showHelp();
     }
   });
 })();

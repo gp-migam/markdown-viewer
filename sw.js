@@ -1,4 +1,4 @@
-const CACHE = 'mdviewer-v3';
+const CACHE = 'mdviewer-v4';
 const ASSETS = [
   './',
   './index.html',
@@ -8,7 +8,7 @@ const ASSETS = [
   './icon-maskable.png',
   'https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js',
   'https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js',
-  'https://cdn.jsdelivr.net/npm/highlight.js@11.10.0/lib/highlight.min.js',
+  'https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11.10.0/highlight.min.js',
 ];
 
 self.addEventListener('install', (e) => {
