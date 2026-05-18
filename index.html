@@ -431,6 +431,17 @@
   .copy-btn.copied { color: var(--accent); border-color: var(--accent); }
   .copy-btn svg { width: 16px; height: 16px; }
 
+  /* Mermaid diagrams */
+  .content .mermaid {
+    text-align: center;
+    margin: 1.25em 0;
+    background: transparent;
+    border: 0;
+    padding: 0;
+    overflow-x: auto;
+  }
+  .content .mermaid > svg { max-width: 100%; height: auto; }
+
   /* Task list */
   .content input[type="checkbox"] {
     margin-right: 6px;
@@ -609,6 +620,7 @@
         <label class="btn" for="file">Open…</label>
         <input id="file" type="file" accept=".md,.markdown,.txt,text/markdown,text/plain" hidden />
         <button id="sample" type="button" title="Load sample">Sample</button>
+        <button id="export" type="button" title="Export to standalone HTML (Ctrl+S)" disabled>Export</button>
       </div>
     </header>
 
@@ -638,6 +650,7 @@
         <dt>Ctrl+O</dt><dd>Open file</dd>
         <dt>Ctrl+B</dt><dd>Toggle outline</dd>
         <dt>Ctrl+V</dt><dd>Render clipboard as markdown</dd>
+        <dt>Ctrl+S</dt><dd>Export to standalone HTML</dd>
         <dt>?</dt><dd>Show this help</dd>
         <dt>Esc</dt><dd>Close this dialog</dd>
         <dt>Drop</dt><dd>Drag a markdown file onto the window</dd>
@@ -664,6 +677,7 @@
   const tocToggleEl = $('toc-toggle');
   const helpEl       = $('help');
   const helpCloseEl  = $('help-close');
+  const exportBtn    = $('export');
 
   /* ---------- Marked + highlight.js setup ---------- */
   marked.setOptions({
@@ -692,6 +706,7 @@
   themeEl.addEventListener('change', (e) => {
     document.body.dataset.theme = e.target.value;
     localStorage.setItem(STORAGE_KEY, e.target.value);
+    renderMermaid();
   });
 
   /* ---------- Render ---------- */
@@ -707,6 +722,8 @@
       a.target = '_blank';
       a.rel = 'noopener noreferrer';
     });
+    // Detach mermaid blocks before the highlight pass so they don't get hljs'd.
+    const hasMermaid = swapMermaidBlocks();
     // Blocks marked.highlight already processed at parse time carry the .hljs class.
     content.querySelectorAll('pre code.hljs').forEach(el => {
       el.dataset.highlighted = 'yes';
@@ -730,7 +747,9 @@
     fnameEl.textContent = name || '';
     updateDocStats();
     document.title = name ? `${name} — Markdown Viewer` : 'Markdown Viewer';
+    exportBtn.disabled = false;
     view.scrollTop = 0;
+    if (hasMermaid) renderMermaid();
   }
 
   function updateDocStats() {
@@ -876,6 +895,193 @@
       pre.appendChild(btn);
     });
   }
+
+  /* ---------- Mermaid (lazy-loaded from jsDelivr) ---------- */
+  let mermaidLib = null;
+  let mermaidLoading = null;
+
+  function isDarkTheme(name = document.body.dataset.theme) {
+    return !['github-light', 'solarized-light'].includes(name);
+  }
+
+  function swapMermaidBlocks() {
+    const codeEls = content.querySelectorAll('pre > code.language-mermaid');
+    if (!codeEls.length) return false;
+    codeEls.forEach(codeEl => {
+      const pre = codeEl.parentElement;
+      const div = document.createElement('div');
+      div.className = 'mermaid';
+      const src = codeEl.textContent;
+      div.dataset.src = src;
+      div.textContent = src;
+      pre.replaceWith(div);
+    });
+    return true;
+  }
+
+  async function loadMermaid() {
+    if (mermaidLib) return mermaidLib;
+    if (!mermaidLoading) {
+      mermaidLoading = import('https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.esm.min.mjs')
+        .then(mod => { mermaidLib = mod.default; return mermaidLib; })
+        .catch(err => { mermaidLoading = null; throw err; });
+    }
+    return mermaidLoading;
+  }
+
+  async function renderMermaid() {
+    const blocks = content.querySelectorAll('.mermaid');
+    if (!blocks.length) return;
+    blocks.forEach(d => {
+      d.removeAttribute('data-processed');
+      if (d.dataset.src) d.textContent = d.dataset.src;
+    });
+    try {
+      const mermaid = await loadMermaid();
+      mermaid.initialize({
+        startOnLoad: false,
+        securityLevel: 'strict',
+        theme: isDarkTheme() ? 'dark' : 'default',
+      });
+      await mermaid.run({ querySelector: '.mermaid', suppressErrors: true });
+      updateDocStats();
+    } catch (err) {
+      console.error('Mermaid render failed', err);
+      toast('Mermaid render failed');
+    }
+  }
+
+  /* ---------- Export to standalone HTML ---------- */
+  const EXPORT_CSS_VARS = [
+    '--bg','--bg-elev','--fg','--muted','--accent','--accent-2',
+    '--border','--code-bg','--link','--quote','--selection',
+    '--radius','--mono','--sans','--shadow'
+  ];
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, c => (
+      { '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]
+    ));
+  }
+
+  function exportHtml() {
+    if (exportBtn.disabled) return;
+    const computed = getComputedStyle(document.body);
+    const vars = EXPORT_CSS_VARS
+      .map(v => `  ${v}: ${computed.getPropertyValue(v).trim()};`)
+      .join('\n');
+
+    const clone = content.cloneNode(true);
+    clone.querySelectorAll('.copy-btn').forEach(b => b.remove());
+    clone.querySelectorAll('.mermaid').forEach(d => {
+      d.removeAttribute('data-src');
+      d.removeAttribute('data-processed');
+    });
+
+    const rawName = (fnameEl.textContent || 'document').trim();
+    const docTitle = rawName.replace(/\.(md|markdown|txt)$/i, '') || 'document';
+
+    const html = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${escapeHtml(docTitle)}</title>
+<style>
+:root {
+${vars}
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  font-family: var(--sans);
+  color: var(--fg);
+  background: var(--bg);
+  line-height: 1.65;
+  padding: 48px 24px 80px;
+}
+.content { max-width: 860px; margin: 0 auto; font-size: 16px; }
+.content h1, .content h2, .content h3, .content h4, .content h5, .content h6 {
+  line-height: 1.25; margin-top: 1.8em; margin-bottom: .5em; font-weight: 700;
+}
+.content h1 { font-size: 2em; border-bottom: 1px solid var(--border); padding-bottom: .3em; margin-top: 0; }
+.content h2 { font-size: 1.5em; border-bottom: 1px solid var(--border); padding-bottom: .25em; }
+.content h3 { font-size: 1.25em; }
+.content h4 { font-size: 1.05em; }
+.content p { margin: 0 0 1em; }
+.content a { color: var(--link); text-decoration: none; border-bottom: 1px solid color-mix(in srgb, var(--link) 40%, transparent); }
+.content a:hover { border-bottom-color: var(--link); }
+.content ul, .content ol { padding-left: 1.6em; margin: 0 0 1em; }
+.content li { margin: .2em 0; }
+.content li > p { margin: .3em 0; }
+.content blockquote {
+  margin: 1em 0; padding: .4em 1em;
+  border-left: 4px solid var(--accent);
+  color: var(--muted);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  border-radius: 0 var(--radius) var(--radius) 0;
+}
+.content blockquote p:last-child { margin-bottom: 0; }
+.content hr { height: 1px; border: 0; background: var(--border); margin: 2em 0; }
+.content table { border-collapse: collapse; margin: 1em 0; width: 100%; font-size: .95em; }
+.content th, .content td { border: 1px solid var(--border); padding: .5em .8em; text-align: left; }
+.content th { background: var(--bg-elev); font-weight: 700; }
+.content tr:nth-child(2n) td { background: color-mix(in srgb, var(--bg-elev) 50%, transparent); }
+.content img { max-width: 100%; border-radius: var(--radius); box-shadow: var(--shadow); }
+.content code {
+  font-family: var(--mono); font-size: .92em;
+  background: var(--code-bg); color: var(--accent-2);
+  padding: .15em .4em; border-radius: 6px; border: 1px solid var(--border);
+}
+.content pre {
+  background: var(--code-bg); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 16px 18px; overflow-x: auto;
+  margin: 1em 0; font-size: .92em; line-height: 1.55; box-shadow: var(--shadow);
+}
+.content pre code { background: transparent; color: var(--fg); padding: 0; border: 0; border-radius: 0; font-size: 1em; }
+.content input[type="checkbox"] { margin-right: 6px; accent-color: var(--accent); }
+.content .mermaid { text-align: center; margin: 1.25em 0; overflow-x: auto; }
+.content .mermaid > svg { max-width: 100%; height: auto; }
+.hljs { color: var(--fg); background: transparent; }
+.hljs-comment, .hljs-quote { color: var(--quote); font-style: italic; }
+.hljs-keyword, .hljs-selector-tag, .hljs-built_in, .hljs-name, .hljs-tag { color: var(--accent-2); }
+.hljs-string, .hljs-title, .hljs-section, .hljs-attribute, .hljs-literal,
+.hljs-template-tag, .hljs-template-variable, .hljs-type, .hljs-addition { color: var(--accent); }
+.hljs-number, .hljs-meta, .hljs-symbol, .hljs-bullet, .hljs-link { color: var(--link); }
+.hljs-variable, .hljs-attr, .hljs-params { color: var(--fg); }
+.hljs-deletion { color: var(--accent-2); }
+.hljs-emphasis { font-style: italic; }
+.hljs-strong { font-weight: 700; }
+@media print {
+  body { background: #fff; color: #1f2328; padding: 0; }
+  .content pre, .content blockquote, .content table, .content img {
+    break-inside: avoid; page-break-inside: avoid; box-shadow: none;
+  }
+  .content h1, .content h2, .content h3 { break-after: avoid; page-break-after: avoid; }
+  .content a[href^="http"]::after {
+    content: " (" attr(href) ")"; color: #555; font-size: .85em; word-break: break-all;
+  }
+}
+</style>
+</head>
+<body>
+<div class="content">${clone.innerHTML}</div>
+</body>
+</html>`;
+
+    const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${docTitle}.html`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    toast('Exported HTML');
+  }
+
+  exportBtn.addEventListener('click', exportHtml);
 
   /* ---------- File handling ---------- */
   function readFile(file) {
@@ -1040,6 +1246,17 @@ curl -fsSL https://example.com/install.sh | bash
 echo "done"
 \`\`\`
 
+## A diagram
+
+\`\`\`mermaid
+flowchart LR
+  A[Drop .md file] --> B{Parse}
+  B --> C[Render HTML]
+  B --> D[Build outline]
+  C --> E[Highlight code]
+  C --> F[Render diagrams]
+\`\`\`
+
 ## A table
 
 | Theme           | Mood       | Background |
@@ -1099,6 +1316,12 @@ Made for reading. Pick a theme above and drop a file in.
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'o') {
       e.preventDefault();
       fileEl.click();
+      return;
+    }
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+      if (exportBtn.disabled) return;
+      e.preventDefault();
+      exportHtml();
       return;
     }
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'b') {
