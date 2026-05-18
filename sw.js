@@ -1,6 +1,6 @@
 // Bump CACHE whenever index.html (or any asset below) changes — otherwise
 // returning users keep the stale copy until they hard-reload.
-const CACHE = 'mdviewer-v5';
+const CACHE = 'mdviewer-v6';
 const ASSETS = [
   './',
   './index.html',

@@ -500,6 +500,44 @@
     white-space: nowrap;
   }
 
+  /* ---------- Front-matter card ---------- */
+  .content .frontmatter {
+    margin: 0 0 1.8em;
+    padding: 14px 18px;
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent);
+    border-radius: var(--radius);
+    font-size: 13.5px;
+  }
+  .content .frontmatter dl {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    column-gap: 14px;
+    row-gap: 4px;
+    margin: 0;
+  }
+  .content .frontmatter dt {
+    color: var(--muted);
+    font-weight: 600;
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: .02em;
+    align-self: center;
+  }
+  .content .frontmatter dd { margin: 0; color: var(--fg); }
+  .content .frontmatter .fm-tag {
+    display: inline-block;
+    background: color-mix(in srgb, var(--accent) 14%, transparent);
+    color: var(--accent);
+    border-radius: 6px;
+    padding: 1px 8px;
+    margin: 1px 4px 1px 0;
+    font-size: 12px;
+    font-family: var(--mono);
+  }
+  .content .frontmatter .fm-null { color: var(--muted); font-style: italic; }
+
   /* ---------- Help modal ---------- */
   .modal-backdrop {
     position: fixed; inset: 0;
@@ -709,12 +747,116 @@
     renderMermaid();
   });
 
+  /* ---------- Front-matter (YAML) parsing ---------- */
+  // Minimal YAML for typical Jekyll/Hugo/Obsidian front-matter:
+  // scalars (string/number/bool/null), inline flow lists [a, b],
+  // and block lists under a bare key.
+  function parseFrontMatter(md) {
+    const m = md.match(/^﻿?---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/);
+    if (!m) return { data: null, body: md };
+    return { data: parseYaml(m[1]), body: md.slice(m[0].length) };
+  }
+
+  function parseYaml(text) {
+    const data = {};
+    let currentKey = null;
+    for (const raw of text.split(/\r?\n/)) {
+      const line = stripYamlComment(raw);
+      if (!line.trim()) continue;
+      const li = line.match(/^\s+-\s+(.*)$/);
+      if (li && currentKey !== null) {
+        if (!Array.isArray(data[currentKey])) data[currentKey] = [];
+        data[currentKey].push(parseYamlScalar(li[1]));
+        continue;
+      }
+      const kv = line.match(/^([\w.-]+)\s*:\s*(.*)$/);
+      if (!kv) continue;
+      const key = kv[1], rest = kv[2].trim();
+      if (rest === '') {
+        data[key] = [];
+        currentKey = key;
+      } else if (rest.startsWith('[') && rest.endsWith(']')) {
+        data[key] = parseInlineList(rest);
+        currentKey = null;
+      } else {
+        data[key] = parseYamlScalar(rest);
+        currentKey = null;
+      }
+    }
+    return data;
+  }
+
+  function parseYamlScalar(s) {
+    s = s.trim();
+    if (!s) return '';
+    if ((s.startsWith('"') && s.endsWith('"')) ||
+        (s.startsWith("'") && s.endsWith("'"))) {
+      return s.slice(1, -1);
+    }
+    if (s === 'true') return true;
+    if (s === 'false') return false;
+    if (s === 'null' || s === '~') return null;
+    if (/^-?\d+$/.test(s)) return Number(s);
+    if (/^-?\d+\.\d+$/.test(s)) return Number(s);
+    return s;
+  }
+
+  function parseInlineList(s) {
+    s = s.slice(1, -1).trim();
+    if (!s) return [];
+    const parts = [];
+    let buf = '', inS = false, inD = false;
+    for (const ch of s) {
+      if (ch === '"' && !inS) inD = !inD;
+      else if (ch === "'" && !inD) inS = !inS;
+      if (ch === ',' && !inS && !inD) { parts.push(buf); buf = ''; }
+      else buf += ch;
+    }
+    if (buf.trim()) parts.push(buf);
+    return parts.map(parseYamlScalar);
+  }
+
+  function stripYamlComment(line) {
+    let inS = false, inD = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (ch === '"' && !inS) inD = !inD;
+      else if (ch === "'" && !inD) inS = !inS;
+      else if (ch === '#' && !inS && !inD && (i === 0 || /\s/.test(line[i - 1]))) {
+        return line.slice(0, i);
+      }
+    }
+    return line;
+  }
+
+  function renderFrontMatter(data) {
+    if (!data || !Object.keys(data).length) return '';
+    const rows = Object.entries(data).map(([k, v]) => {
+      let valHtml;
+      if (Array.isArray(v)) {
+        valHtml = v.length
+          ? v.map(item => `<span class="fm-tag">${escapeHtml(String(item))}</span>`).join('')
+          : '<span class="fm-null">[]</span>';
+      } else if (v === null) {
+        valHtml = '<span class="fm-null">null</span>';
+      } else {
+        valHtml = escapeHtml(String(v));
+      }
+      return `<dt>${escapeHtml(k)}</dt><dd>${valHtml}</dd>`;
+    }).join('');
+    return `<aside class="frontmatter" aria-label="Document metadata"><dl>${rows}</dl></aside>`;
+  }
+
   /* ---------- Render ---------- */
   let highlightObserver = null;
+  let currentFrontMatter = null;
 
   function render(md, name) {
-    const html = marked.parse(md);
-    content.innerHTML = DOMPurify.sanitize(html, {
+    const { data: fm, body } = parseFrontMatter(md);
+    currentFrontMatter = fm;
+    const fmHtml = renderFrontMatter(fm);
+    const html = marked.parse(body);
+    content.innerHTML = DOMPurify.sanitize(fmHtml + html, {
       ADD_ATTR: ['target', 'rel', 'id'],
     });
     // Open external links in new tab
@@ -746,7 +888,8 @@
     buildToc();
     fnameEl.textContent = name || '';
     updateDocStats();
-    document.title = name ? `${name} — Markdown Viewer` : 'Markdown Viewer';
+    const tabTitle = (fm && typeof fm.title === 'string' && fm.title.trim()) || name;
+    document.title = tabTitle ? `${tabTitle} — Markdown Viewer` : 'Markdown Viewer';
     exportBtn.disabled = false;
     view.scrollTop = 0;
     if (hasMermaid) renderMermaid();
@@ -979,7 +1122,9 @@
     });
 
     const rawName = (fnameEl.textContent || 'document').trim();
-    const docTitle = rawName.replace(/\.(md|markdown|txt)$/i, '') || 'document';
+    const fmTitle = currentFrontMatter && typeof currentFrontMatter.title === 'string'
+      ? currentFrontMatter.title.trim() : '';
+    const docTitle = fmTitle || rawName.replace(/\.(md|markdown|txt)$/i, '') || 'document';
 
     const html = `<!doctype html>
 <html lang="en">
@@ -1040,6 +1185,29 @@ body {
 }
 .content pre code { background: transparent; color: var(--fg); padding: 0; border: 0; border-radius: 0; font-size: 1em; }
 .content input[type="checkbox"] { margin-right: 6px; accent-color: var(--accent); }
+.content .frontmatter {
+  margin: 0 0 1.8em; padding: 14px 18px;
+  background: var(--bg-elev); border: 1px solid var(--border);
+  border-left: 3px solid var(--accent); border-radius: var(--radius);
+  font-size: 13.5px;
+}
+.content .frontmatter dl {
+  display: grid; grid-template-columns: max-content 1fr;
+  column-gap: 14px; row-gap: 4px; margin: 0;
+}
+.content .frontmatter dt {
+  color: var(--muted); font-weight: 600; font-family: var(--mono);
+  font-size: 12px; letter-spacing: .02em; align-self: center;
+}
+.content .frontmatter dd { margin: 0; color: var(--fg); }
+.content .frontmatter .fm-tag {
+  display: inline-block;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent); border-radius: 6px;
+  padding: 1px 8px; margin: 1px 4px 1px 0;
+  font-size: 12px; font-family: var(--mono);
+}
+.content .frontmatter .fm-null { color: var(--muted); font-style: italic; }
 .content .mermaid { text-align: center; margin: 1.25em 0; overflow-x: auto; }
 .content .mermaid > svg { max-width: 100%; height: auto; }
 .hljs { color: var(--fg); background: transparent; }
@@ -1200,7 +1368,15 @@ body {
     content.innerHTML = empty;
   }
 
-  const sampleMd = `# Markdown Viewer
+  const sampleMd = `---
+title: Markdown Viewer
+author: gp-migam
+date: 2026-05-18
+tags: [markdown, viewer, demo]
+draft: false
+---
+
+# Markdown Viewer
 
 A small, fast, single-file viewer for **.md** files. Drag a file onto the window — that's it.
 

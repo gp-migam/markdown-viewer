@@ -21,7 +21,9 @@ Then: `Ctrl+B` toggles the outline, `Ctrl+S` exports to a standalone HTML file
 Features baked into `index.html`: marked + DOMPurify for parsing/sanitizing,
 highlight.js for code blocks, Mermaid for fenced ` ```mermaid ` diagrams, a
 copy-to-clipboard button on every code block, a TOC sidebar built from headings,
-print stylesheet, and a doc-stats readout (word / reading-time / heading count).
+print stylesheet, a doc-stats readout (word / reading-time / heading count), and
+YAML front-matter (`---…---` at the top of the file) rendered as a metadata card
+above the content — `title:` overrides the browser tab and export filename.
 
 ## The `.cmd` / `.ps1` launcher trick
 
