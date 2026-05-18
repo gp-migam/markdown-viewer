@@ -634,6 +634,11 @@
           <line x1="9" y1="4" x2="9" y2="20"/>
         </svg>
       </button>
+      <button id="back" class="icon-btn" type="button" title="Back (Alt+Left)" aria-label="Back" hidden disabled>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <polyline points="15 18 9 12 15 6"/>
+        </svg>
+      </button>
       <div class="brand">
         <span class="dot" aria-hidden="true"></span>
         <span>Markdown Viewer</span>
@@ -657,6 +662,7 @@
         </select>
         <label class="btn" for="file">Open…</label>
         <input id="file" type="file" accept=".md,.markdown,.txt,text/markdown,text/plain" hidden />
+        <button id="folder" type="button" title="Open folder (enables wiki-style links)">Folder…</button>
         <button id="sample" type="button" title="Load sample">Sample</button>
         <button id="export" type="button" title="Export to standalone HTML (Ctrl+S)" disabled>Export</button>
       </div>
@@ -689,9 +695,10 @@
         <dt>Ctrl+B</dt><dd>Toggle outline</dd>
         <dt>Ctrl+V</dt><dd>Render clipboard as markdown</dd>
         <dt>Ctrl+S</dt><dd>Export to standalone HTML</dd>
+        <dt>Alt+Left</dt><dd>Back (wiki-link history)</dd>
         <dt>?</dt><dd>Show this help</dd>
         <dt>Esc</dt><dd>Close this dialog</dd>
-        <dt>Drop</dt><dd>Drag a markdown file onto the window</dd>
+        <dt>Drop</dt><dd>Drag a file or folder onto the window</dd>
       </dl>
       <div class="row">
         <button type="button" id="help-close">Close</button>
@@ -716,6 +723,8 @@
   const helpEl       = $('help');
   const helpCloseEl  = $('help-close');
   const exportBtn    = $('export');
+  const backBtn      = $('back');
+  const folderBtn    = $('folder');
 
   /* ---------- Marked + highlight.js setup ---------- */
   marked.setOptions({
@@ -886,9 +895,11 @@
     }
     addCopyButtons();
     buildToc();
+    revokeAssetUrls();
     fnameEl.textContent = name || '';
     updateDocStats();
-    const tabTitle = (fm && typeof fm.title === 'string' && fm.title.trim()) || name;
+    const baseName = name ? String(name).split('/').pop() : '';
+    const tabTitle = (fm && typeof fm.title === 'string' && fm.title.trim()) || baseName;
     document.title = tabTitle ? `${tabTitle} — Markdown Viewer` : 'Markdown Viewer';
     exportBtn.disabled = false;
     view.scrollTop = 0;
@@ -1122,9 +1133,10 @@
     });
 
     const rawName = (fnameEl.textContent || 'document').trim();
+    const baseName = rawName.split('/').pop();
     const fmTitle = currentFrontMatter && typeof currentFrontMatter.title === 'string'
       ? currentFrontMatter.title.trim() : '';
-    const docTitle = fmTitle || rawName.replace(/\.(md|markdown|txt)$/i, '') || 'document';
+    const docTitle = fmTitle || baseName.replace(/\.(md|markdown|txt)$/i, '') || 'document';
 
     const html = `<!doctype html>
 <html lang="en">
@@ -1251,6 +1263,194 @@ body {
 
   exportBtn.addEventListener('click', exportHtml);
 
+  /* ---------- Folder mode + wiki-style relative links ---------- */
+  // When the user opens a *folder* (showDirectoryPicker or folder drop), we keep a
+  // FileSystemDirectoryHandle and resolve relative `.md` link clicks against it,
+  // so `[other](./other.md)` loads in-app instead of opening a dead file:// URL.
+  let dirHandle = null;
+  let currentPath = '';        // path of the rendered file relative to dirHandle
+  let navStack = [];           // visited paths (for back navigation)
+  let navIndex = -1;
+  let assetUrls = [];          // object URLs created for rewritten <img src>
+
+  function revokeAssetUrls() {
+    for (const u of assetUrls) URL.revokeObjectURL(u);
+    assetUrls = [];
+  }
+
+  function updateBackBtn() {
+    const canBack = !!dirHandle && navIndex > 0;
+    backBtn.disabled = !canBack;
+    backBtn.hidden = !dirHandle;
+  }
+
+  function clearFolderState() {
+    dirHandle = null;
+    currentPath = '';
+    navStack = [];
+    navIndex = -1;
+    revokeAssetUrls();
+    updateBackBtn();
+  }
+
+  function pushNav(path) {
+    if (navIndex < navStack.length - 1) navStack = navStack.slice(0, navIndex + 1);
+    if (navStack[navStack.length - 1] !== path) {
+      navStack.push(path);
+      navIndex = navStack.length - 1;
+    }
+    updateBackBtn();
+  }
+
+  // Resolve `rel` (URL-encoded) against currentPath inside dirHandle.
+  // Returns { dir, name, fullPath } or null if it escapes / doesn't exist.
+  async function resolveRelative(rel) {
+    if (!dirHandle) return null;
+    const pathPart = rel.split(/[?#]/)[0];
+    if (!pathPart) return null;
+    let parts;
+    if (pathPart.startsWith('/')) {
+      parts = pathPart.slice(1).split('/');
+    } else {
+      const baseParts = currentPath ? currentPath.split('/').slice(0, -1) : [];
+      parts = baseParts.concat(pathPart.split('/'));
+    }
+    const norm = [];
+    for (const raw of parts) {
+      let seg;
+      try { seg = decodeURIComponent(raw); } catch { seg = raw; }
+      if (!seg || seg === '.') continue;
+      if (seg === '..') { if (norm.length) norm.pop(); continue; }
+      norm.push(seg);
+    }
+    if (!norm.length) return null;
+    const name = norm.pop();
+    let dir = dirHandle;
+    for (const seg of norm) {
+      try { dir = await dir.getDirectoryHandle(seg); }
+      catch { return null; }
+    }
+    return { dir, name, fullPath: [...norm, name].join('/') };
+  }
+
+  async function rewriteRelativeAssets() {
+    if (!dirHandle) return;
+    const imgs = content.querySelectorAll('img[src]');
+    for (const img of imgs) {
+      const src = img.getAttribute('src');
+      if (!src || /^(?:[a-z][\w+.-]*:|\/\/|data:|blob:)/i.test(src)) continue;
+      const r = await resolveRelative(src);
+      if (!r) continue;
+      try {
+        const fh = await r.dir.getFileHandle(r.name);
+        const file = await fh.getFile();
+        const url = URL.createObjectURL(file);
+        assetUrls.push(url);
+        img.src = url;
+      } catch { /* skip missing assets silently */ }
+    }
+  }
+
+  async function loadByPath(path, { skipPush = false } = {}) {
+    if (!dirHandle) return false;
+    const r = await resolveRelative(path);
+    if (!r) { toast('File not found: ' + path); return false; }
+    let text;
+    try {
+      const fh = await r.dir.getFileHandle(r.name);
+      const file = await fh.getFile();
+      text = await file.text();
+    } catch { toast('Could not open ' + r.name); return false; }
+    currentPath = r.fullPath;
+    render(text, r.fullPath);
+    await rewriteRelativeAssets();
+    const hashIdx = path.indexOf('#');
+    if (hashIdx >= 0) {
+      const frag = decodeURIComponent(path.slice(hashIdx + 1));
+      requestAnimationFrame(() => {
+        const el = document.getElementById(frag);
+        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+    }
+    if (skipPush) updateBackBtn(); else pushNav(r.fullPath);
+    return true;
+  }
+
+  async function openFolderHandle(handle) {
+    clearFolderState();
+    dirHandle = handle;
+    const candidates = ['README.md', 'readme.md', 'Readme.md', 'index.md', 'INDEX.md'];
+    let entryName = null;
+    for (const name of candidates) {
+      try { await handle.getFileHandle(name); entryName = name; break; } catch {}
+    }
+    if (!entryName) {
+      try {
+        for await (const [name, entry] of handle.entries()) {
+          if (entry.kind === 'file' && /\.(md|markdown|txt)$/i.test(name)) {
+            entryName = name; break;
+          }
+        }
+      } catch {}
+    }
+    if (!entryName) {
+      toast('No markdown file found in folder');
+      updateBackBtn();
+      return;
+    }
+    await loadByPath(entryName);
+    toast('Folder opened — relative links now resolve');
+  }
+
+  async function openFolderViaPicker() {
+    if (!window.showDirectoryPicker) {
+      toast('Folder open requires Chrome or Edge');
+      return;
+    }
+    try {
+      const h = await window.showDirectoryPicker({ mode: 'read' });
+      await openFolderHandle(h);
+    } catch (e) {
+      if (e && e.name !== 'AbortError') console.error(e);
+    }
+  }
+
+  async function goBack() {
+    if (!dirHandle || navIndex <= 0) return;
+    navIndex--;
+    await loadByPath(navStack[navIndex], { skipPush: true });
+  }
+
+  // Intercept relative link clicks inside rendered markdown.
+  content.addEventListener('click', async (e) => {
+    const a = e.target.closest('a[href]');
+    if (!a || !content.contains(a)) return;
+    const href = a.getAttribute('href');
+    if (!href) return;
+    if (href.startsWith('#')) return;                     // in-page anchor — native scroll
+    if (/^(?:[a-z][\w+.-]*:|\/\/)/i.test(href)) return;   // external (http, mailto, etc.)
+    e.preventDefault();
+    if (!dirHandle) { toast('Open a folder to follow relative links'); return; }
+    const pathOnly = href.split(/[?#]/)[0];
+    if (/\.(md|markdown|txt)$/i.test(pathOnly)) {
+      await loadByPath(href);
+      return;
+    }
+    // Other relative files (PDFs, images, etc.) — load via blob URL in a new tab.
+    const r = await resolveRelative(href);
+    if (!r) { toast('File not found: ' + href); return; }
+    try {
+      const fh = await r.dir.getFileHandle(r.name);
+      const file = await fh.getFile();
+      const url = URL.createObjectURL(file);
+      window.open(url, '_blank', 'noopener');
+      setTimeout(() => URL.revokeObjectURL(url), 30000);
+    } catch { toast('Could not open ' + r.name); }
+  });
+
+  backBtn.addEventListener('click', goBack);
+  folderBtn.addEventListener('click', openFolderViaPicker);
+
   /* ---------- File handling ---------- */
   function readFile(file) {
     if (!file) return;
@@ -1262,7 +1462,7 @@ body {
 
   fileEl.addEventListener('change', (e) => {
     const f = e.target.files && e.target.files[0];
-    if (f) readFile(f);
+    if (f) { clearFolderState(); readFile(f); }
     fileEl.value = ''; // allow re-select of same file
   });
 
@@ -1287,13 +1487,30 @@ body {
     dragDepth = Math.max(0, dragDepth - 1);
     if (dragDepth === 0) dropEl.classList.remove('show');
   });
-  window.addEventListener('drop', (e) => {
+  window.addEventListener('drop', async (e) => {
     if (!isFileDrag(e)) return;
     e.preventDefault();
     dragDepth = 0;
     dropEl.classList.remove('show');
+    // Modern path: detect folder drops and capture a directory handle.
+    const items = e.dataTransfer.items;
+    if (items && items.length && typeof items[0].getAsFileSystemHandle === 'function') {
+      try {
+        const handle = await items[0].getAsFileSystemHandle();
+        if (handle && handle.kind === 'directory') {
+          await openFolderHandle(handle);
+          return;
+        }
+        if (handle && handle.kind === 'file') {
+          clearFolderState();
+          const file = await handle.getFile();
+          readFile(file);
+          return;
+        }
+      } catch (err) { /* fall through to legacy path */ }
+    }
     const f = e.dataTransfer.files && e.dataTransfer.files[0];
-    if (f) readFile(f);
+    if (f) { clearFolderState(); readFile(f); }
   });
 
   /* ---------- Toast ---------- */
@@ -1321,6 +1538,7 @@ body {
       const md = new TextDecoder('utf-8').decode(bytes);
       const nameRaw = params.get('name');
       const name = nameRaw ? decodeURIComponent(nameRaw) : 'document.md';
+      clearFolderState();
       render(md, name);
       return true;
     } catch (err) {
@@ -1345,7 +1563,11 @@ body {
     launchQueue.setConsumer(async (params) => {
       if (!params || !params.files || !params.files.length) return;
       try {
-        const file = await params.files[0].getFile();
+        const fh = params.files[0];
+        // If the OS handed us a directory, treat it as folder mode.
+        if (fh.kind === 'directory') { await openFolderHandle(fh); return; }
+        clearFolderState();
+        const file = await fh.getFile();
         readFile(file);
       } catch (e) { console.error(e); }
     });
@@ -1458,12 +1680,13 @@ You can write \`inline code\`, **bold**, *italic*, ~~strikethrough~~, and [links
 Made for reading. Pick a theme above and drop a file in.
 `;
 
-  $('sample').addEventListener('click', () => render(sampleMd, 'sample.md'));
+  $('sample').addEventListener('click', () => { clearFolderState(); render(sampleMd, 'sample.md'); });
 
   /* ---------- Paste support (bonus) ---------- */
   window.addEventListener('paste', (e) => {
     const text = e.clipboardData && e.clipboardData.getData('text');
     if (text && /[#*`>\-]|\n/.test(text)) {
+      clearFolderState();
       render(text, 'pasted.md');
       toast('Rendered pasted markdown');
     }
@@ -1504,6 +1727,11 @@ Made for reading. Pick a theme above and drop a file in.
       if (tocToggleEl.disabled) return;
       e.preventDefault();
       setTocCollapsed(!tocEl.classList.contains('collapsed'));
+      return;
+    }
+    if (e.altKey && e.key === 'ArrowLeft' && dirHandle && navIndex > 0) {
+      e.preventDefault();
+      goBack();
       return;
     }
     if (e.key === 'Escape' && helpEl.classList.contains('show')) {
