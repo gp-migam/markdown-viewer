@@ -11,7 +11,7 @@ keeps working offline once loaded.
 
 Three ways to open a document:
 
-- **Drag-and-drop** a `.md` / `.markdown` / `.mkd` / `.txt` file onto the window.
+- **Drag-and-drop** a `.md` / `.markdown` file onto the window.
 - **Open…** button (or `Ctrl+O`) — file picker.
 - **Paste** markdown into the page with `Ctrl+V`.
 
@@ -32,6 +32,12 @@ drag-dropped (Chrome/Edge), or launched as the installed PWA. Files opened
 through the `<input type=file>` picker, `Ctrl+V` paste, or the `#md=…` hash
 protocol have no writable handle, so toggles still update the in-memory copy
 (and the **Export** output) but are not persisted to disk.
+
+Opening a folder also populates a **Files** section at the top of the sidebar
+listing every `.md` / `.markdown` file underneath the root (recursive, paths
+relative to the folder, dotfiles + `node_modules`/`.git`/`dist`/`build`
+skipped, depth-capped at 8). Click any entry to load it. Single-file drops
+don't show this section — there's no parent directory to enumerate.
 
 ## The `.cmd` / `.ps1` launcher trick
 

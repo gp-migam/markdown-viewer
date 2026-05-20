@@ -33,8 +33,7 @@
     {
       "action": "./",
       "accept": {
-        "text/markdown": [".md", ".markdown", ".mdown", ".mkd"],
-        "text/plain": [".txt"]
+        "text/markdown": [".md", ".markdown", ".mdown", ".mkd"]
       },
       "icons": [
         {

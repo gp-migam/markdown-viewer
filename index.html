@@ -139,7 +139,7 @@
   .icon-btn:disabled:hover { color: var(--fg); border-color: var(--border); }
   .icon-btn svg { width: 18px; height: 18px; }
 
-  /* ---------- Sidebar (TOC) ---------- */
+  /* ---------- Sidebar (Files + Outline) ---------- */
   aside.toc {
     width: 280px;
     background: var(--bg-elev);
@@ -153,6 +153,25 @@
   aside.toc.collapsed {
     width: 0;
     border-right-width: 0;
+  }
+  aside.toc .sb-section {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+  aside.toc .sb-section.files {
+    flex: 0 1 auto;
+    max-height: 45%;
+    border-bottom: 1px solid var(--border);
+  }
+  aside.toc .sb-section.outline {
+    flex: 1 1 auto;
+    min-height: 0;
+  }
+  aside.toc .files-list a {
+    font-family: var(--mono);
+    font-size: 12.5px;
+    padding-left: 10px;
   }
   aside.toc .toc-header {
     display: flex;
@@ -631,7 +650,7 @@
 <body data-theme="dracula">
   <div class="app">
     <header class="bar">
-      <button id="toc-toggle" class="icon-btn" type="button" title="Toggle outline (Ctrl+B)" aria-label="Toggle outline" aria-expanded="true" aria-controls="toc" disabled>
+      <button id="toc-toggle" class="icon-btn" type="button" title="Toggle sidebar (Ctrl+B)" aria-label="Toggle sidebar" aria-expanded="true" aria-controls="toc" disabled>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <rect x="3" y="4" width="18" height="16" rx="2"/>
           <line x1="9" y1="4" x2="9" y2="20"/>
@@ -664,16 +683,22 @@
           <option value="github-light">GitHub Light</option>
         </select>
         <label class="btn" for="file">Open…</label>
-        <input id="file" type="file" accept=".md,.markdown,.txt,text/markdown,text/plain" hidden />
+        <input id="file" type="file" accept=".md,.markdown,text/markdown" hidden />
         <button id="folder" type="button" title="Open folder (enables wiki-style links)">Folder…</button>
         <button id="sample" type="button" title="Load sample">Sample</button>
         <button id="export" type="button" title="Export to standalone HTML (Ctrl+S)" disabled>Export</button>
       </div>
     </header>
 
-    <aside class="toc collapsed" id="toc" aria-label="Table of contents">
-      <div class="toc-header">Outline</div>
-      <ul class="toc-list" id="toc-list"></ul>
+    <aside class="toc collapsed" id="toc" aria-label="Sidebar">
+      <div class="sb-section files" id="files-section" hidden>
+        <div class="toc-header">Files</div>
+        <ul class="toc-list files-list" id="files-list"></ul>
+      </div>
+      <div class="sb-section outline">
+        <div class="toc-header">Outline</div>
+        <ul class="toc-list" id="toc-list"></ul>
+      </div>
     </aside>
 
     <main class="view" id="view">
@@ -684,7 +709,7 @@
   <div class="drop-overlay" id="drop">
     <div class="panel">
       <h1>Drop your markdown file</h1>
-      <p>.md · .markdown · .txt</p>
+      <p>.md · .markdown</p>
     </div>
   </div>
 
@@ -723,6 +748,8 @@
   const tocEl       = $('toc');
   const tocListEl   = $('toc-list');
   const tocToggleEl = $('toc-toggle');
+  const filesSectionEl = $('files-section');
+  const filesListEl    = $('files-list');
   const helpEl       = $('help');
   const helpCloseEl  = $('help-close');
   const exportBtn    = $('export');
@@ -976,11 +1003,9 @@
     tocListEl.innerHTML = '';
     const headings = content.querySelectorAll('h1, h2, h3, h4, h5, h6');
     if (!headings.length) {
-      tocToggleEl.disabled = true;
-      setTocCollapsed(true, { persist: false });
+      updateSidebarToggle();
       return;
     }
-    tocToggleEl.disabled = false;
 
     const used = new Set();
     const frag = document.createDocumentFragment();
@@ -1002,10 +1027,16 @@
       frag.appendChild(li);
     });
     tocListEl.appendChild(frag);
+    updateSidebarToggle();
 
-    // Restore collapsed preference (default expanded when we have headings)
-    const stored = localStorage.getItem(TOC_COLLAPSED_KEY);
-    setTocCollapsed(stored === '1', { persist: false });
+    // Restore collapsed preference on a fresh document load — but only in
+    // single-file mode. In folder mode the sidebar's collapse state is owned
+    // by the folder session (openFolderHandle expands it; subsequent file
+    // navigations should leave it alone).
+    if (!dirHandle) {
+      const stored = localStorage.getItem(TOC_COLLAPSED_KEY);
+      setTocCollapsed(stored === '1', { persist: false });
+    }
 
     // Scrollspy
     const linkById = new Map(
@@ -1045,6 +1076,82 @@
     if (tocToggleEl.disabled) return;
     setTocCollapsed(!tocEl.classList.contains('collapsed'));
   });
+
+  function updateSidebarToggle() {
+    const hasFiles = !filesSectionEl.hidden && filesListEl.children.length > 0;
+    const hasOutline = tocListEl.children.length > 0;
+    const hasAny = hasFiles || hasOutline;
+    tocToggleEl.disabled = !hasAny;
+    if (!hasAny) setTocCollapsed(true, { persist: false });
+  }
+
+  /* ---------- Files list (folder mode) ---------- */
+  const FILE_ENUM_MAX_DEPTH = 8;
+  const FILE_ENUM_SKIP_DIRS = new Set(['node_modules', '.git', '.svn', '.hg', 'dist', 'build']);
+
+  async function enumerateMarkdownFiles(dir, prefix = '', out = [], depth = 0) {
+    if (depth > FILE_ENUM_MAX_DEPTH) return out;
+    try {
+      for await (const [name, entry] of dir.entries()) {
+        if (name.startsWith('.')) continue;
+        const path = prefix ? `${prefix}/${name}` : name;
+        if (entry.kind === 'directory') {
+          if (FILE_ENUM_SKIP_DIRS.has(name)) continue;
+          await enumerateMarkdownFiles(entry, path, out, depth + 1);
+        } else if (/\.(md|markdown)$/i.test(name)) {
+          out.push(path);
+        }
+      }
+    } catch { /* permission denied or transient — skip subtree */ }
+    return out;
+  }
+
+  async function buildFileList() {
+    if (!dirHandle) {
+      filesSectionEl.hidden = true;
+      filesListEl.innerHTML = '';
+      updateSidebarToggle();
+      return;
+    }
+    const files = await enumerateMarkdownFiles(dirHandle);
+    files.sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
+    filesListEl.innerHTML = '';
+    const frag = document.createDocumentFragment();
+    for (const path of files) {
+      const li = document.createElement('li');
+      const a = document.createElement('a');
+      a.href = '#';
+      a.textContent = path;
+      a.title = path;
+      a.dataset.path = path;
+      if (path === currentPath) a.classList.add('active');
+      a.addEventListener('click', (e) => {
+        e.preventDefault();
+        // Files-list paths are relative to dirHandle root, not to currentPath —
+        // prefix with `/` so resolveRelative parses them as absolute.
+        loadByPath('/' + path);
+      });
+      li.appendChild(a);
+      frag.appendChild(li);
+    }
+    filesListEl.appendChild(frag);
+    filesSectionEl.hidden = files.length === 0;
+    updateSidebarToggle();
+  }
+
+  function setActiveFile(path) {
+    if (filesSectionEl.hidden) return;
+    filesListEl.querySelectorAll('a.active').forEach(a => a.classList.remove('active'));
+    if (!path) return;
+    const link = filesListEl.querySelector(`a[data-path="${CSS.escape(path)}"]`);
+    if (!link) return;
+    link.classList.add('active');
+    const listRect = filesListEl.getBoundingClientRect();
+    const linkRect = link.getBoundingClientRect();
+    if (linkRect.top < listRect.top || linkRect.bottom > listRect.bottom) {
+      link.scrollIntoView({ block: 'nearest' });
+    }
+  }
 
   /* ---------- Copy buttons on fenced code blocks ---------- */
   const COPY_SVG  = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>';
@@ -1242,7 +1349,7 @@
     const baseName = rawName.split('/').pop();
     const fmTitle = currentFrontMatter && typeof currentFrontMatter.title === 'string'
       ? currentFrontMatter.title.trim() : '';
-    const docTitle = fmTitle || baseName.replace(/\.(md|markdown|txt)$/i, '') || 'document';
+    const docTitle = fmTitle || baseName.replace(/\.(md|markdown)$/i, '') || 'document';
 
     const html = `<!doctype html>
 <html lang="en">
@@ -1397,6 +1504,10 @@ body {
     navIndex = -1;
     currentFileHandle = null;
     clearTimeout(saveTimer);
+    if (filesSectionEl) {
+      filesSectionEl.hidden = true;
+      filesListEl.innerHTML = '';
+    }
     revokeAssetUrls();
     updateBackBtn();
   }
@@ -1482,12 +1593,15 @@ body {
       });
     }
     if (skipPush) updateBackBtn(); else pushNav(r.fullPath);
+    setActiveFile(r.fullPath);
     return true;
   }
 
   async function openFolderHandle(handle) {
     clearFolderState();
     dirHandle = handle;
+    await buildFileList();
+    setTocCollapsed(false);
     const candidates = ['README.md', 'readme.md', 'Readme.md', 'index.md', 'INDEX.md'];
     let entryName = null;
     for (const name of candidates) {
@@ -1496,14 +1610,17 @@ body {
     if (!entryName) {
       try {
         for await (const [name, entry] of handle.entries()) {
-          if (entry.kind === 'file' && /\.(md|markdown|txt)$/i.test(name)) {
+          if (entry.kind === 'file' && /\.(md|markdown)$/i.test(name)) {
             entryName = name; break;
           }
         }
       } catch {}
     }
     if (!entryName) {
-      toast('No markdown file found in folder');
+      const found = filesListEl.children.length;
+      toast(found
+        ? `Folder opened — ${found} file${found === 1 ? '' : 's'} in the sidebar`
+        : 'No markdown file found in folder');
       updateBackBtn();
       return;
     }
@@ -1541,7 +1658,7 @@ body {
     e.preventDefault();
     if (!dirHandle) { toast('Open a folder to follow relative links'); return; }
     const pathOnly = href.split(/[?#]/)[0];
-    if (/\.(md|markdown|txt)$/i.test(pathOnly)) {
+    if (/\.(md|markdown)$/i.test(pathOnly)) {
       await loadByPath(href);
       return;
     }
@@ -1695,7 +1812,7 @@ body {
     </div>
     <h2>Drop a markdown file anywhere</h2>
     <p>Or click <strong>Open…</strong> to pick one. Try <strong>Sample</strong> to see what the themes look like.</p>
-    <div class="hint">.md · .markdown · .txt</div>
+    <div class="hint">.md · .markdown</div>
   </div>`;
   if (!loadFromHash()) {
     content.innerHTML = empty;
