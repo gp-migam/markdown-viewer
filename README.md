@@ -25,6 +25,14 @@ print stylesheet, a doc-stats readout (word / reading-time / heading count), and
 YAML front-matter (`---…---` at the top of the file) rendered as a metadata card
 above the content — `title:` overrides the browser tab and export filename.
 
+GFM task-list checkboxes (`- [ ]` / `- [x]`) are interactive: click to toggle,
+and the change is written back to the source file when the viewer holds a
+writable handle to it — i.e. when the file was opened via **Folder…** or
+drag-dropped (Chrome/Edge), or launched as the installed PWA. Files opened
+through the `<input type=file>` picker, `Ctrl+V` paste, or the `#md=…` hash
+protocol have no writable handle, so toggles still update the in-memory copy
+(and the **Export** output) but are not persisted to disk.
+
 ## The `.cmd` / `.ps1` launcher trick
 
 `mdviewer.cmd` and `mdviewer.ps1` let you open a local `.md` file in the viewer

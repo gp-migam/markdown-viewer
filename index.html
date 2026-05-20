@@ -447,6 +447,9 @@
     margin-right: 6px;
     accent-color: var(--accent);
   }
+  .content li > input[type="checkbox"]:not([disabled]) {
+    cursor: pointer;
+  }
 
   /* Highlight.js token colors that re-skin per theme */
   .hljs { color: var(--fg); background: transparent; }
@@ -859,10 +862,46 @@
   /* ---------- Render ---------- */
   let highlightObserver = null;
   let currentFrontMatter = null;
+  let currentMd = '';            // full source (incl. front-matter) — mutated by task toggles
+  let currentFileHandle = null;  // FileSystemFileHandle if writable; null for hash/input/paste
+  let taskPositions = [];        // byte offsets in currentMd of the char inside each [_]
+  let saveTimer = null;
+  let writeFailedToasted = false;
+
+  // Walk marked's token tree to find task list items and their offsets in `body`.
+  // Using the lexer avoids false positives that a naive regex would hit inside
+  // fenced/indented code blocks or HTML blocks.
+  function findTaskPositions(body) {
+    let tokens;
+    try { tokens = marked.lexer(body); } catch { return []; }
+    const out = [];
+    let cursor = 0;
+    function walk(toks) {
+      for (const t of toks) {
+        if (t && t.type === 'list_item' && t.task && typeof t.raw === 'string') {
+          const start = body.indexOf(t.raw, cursor);
+          if (start >= 0) {
+            const br = t.raw.indexOf('[');
+            if (br >= 0) out.push(start + br + 1);
+            cursor = start + t.raw.length;
+          }
+        }
+        if (t && t.tokens) walk(t.tokens);
+        if (t && t.items) walk(t.items);
+      }
+    }
+    walk(tokens);
+    return out;
+  }
 
   function render(md, name) {
+    clearTimeout(saveTimer);
+    currentMd = md;
     const { data: fm, body } = parseFrontMatter(md);
     currentFrontMatter = fm;
+    const fmOffset = md.length - body.length;
+    taskPositions = findTaskPositions(body).map(p => p + fmOffset);
+    writeFailedToasted = false;
     const fmHtml = renderFrontMatter(fm);
     const html = marked.parse(body);
     content.innerHTML = DOMPurify.sanitize(fmHtml + html, {
@@ -894,6 +933,7 @@
       pending.forEach(el => highlightObserver.observe(el));
     }
     addCopyButtons();
+    wireTaskCheckboxes();
     buildToc();
     revokeAssetUrls();
     fnameEl.textContent = name || '';
@@ -1048,6 +1088,72 @@
       });
       pre.appendChild(btn);
     });
+  }
+
+  /* ---------- Task-list checkboxes (interactive + write-back) ---------- */
+  function wireTaskCheckboxes() {
+    const boxes = content.querySelectorAll('li > input[type="checkbox"]');
+    if (!boxes.length) return;
+    // Source mapping is only trustworthy if counts match. If they don't, leave
+    // the checkboxes read-only rather than silently corrupting the file.
+    if (boxes.length !== taskPositions.length) {
+      console.warn('Task list: rendered %d checkbox(es) but found %d source position(s) — keeping read-only',
+        boxes.length, taskPositions.length);
+      return;
+    }
+    boxes.forEach((cb, idx) => {
+      cb.disabled = false;
+      cb.removeAttribute('disabled');
+      cb.dataset.taskIndex = String(idx);
+      cb.addEventListener('change', () => onTaskToggle(idx, cb.checked));
+    });
+  }
+
+  function onTaskToggle(idx, checked) {
+    const pos = taskPositions[idx];
+    if (typeof pos !== 'number' || pos < 0 || pos >= currentMd.length) return;
+    const existing = currentMd[pos];
+    // Preserve case of `X` if it was uppercase; default new mark to lowercase `x`.
+    const replacement = checked ? (existing === 'X' ? 'X' : 'x') : ' ';
+    currentMd = currentMd.slice(0, pos) + replacement + currentMd.slice(pos + 1);
+    scheduleSave();
+  }
+
+  function scheduleSave() {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(saveCurrentMd, 150);
+  }
+
+  async function saveCurrentMd() {
+    if (!currentFileHandle) {
+      if (!writeFailedToasted) {
+        toast('Changes won’t persist — open via Folder for auto-save');
+        writeFailedToasted = true;
+      }
+      return;
+    }
+    try {
+      if (typeof currentFileHandle.queryPermission === 'function') {
+        let perm = await currentFileHandle.queryPermission({ mode: 'readwrite' });
+        if (perm !== 'granted' && typeof currentFileHandle.requestPermission === 'function') {
+          perm = await currentFileHandle.requestPermission({ mode: 'readwrite' });
+        }
+        if (perm !== 'granted') {
+          if (!writeFailedToasted) { toast('Write permission denied'); writeFailedToasted = true; }
+          return;
+        }
+      }
+      const w = await currentFileHandle.createWritable();
+      await w.write(currentMd);
+      await w.close();
+      toast('Saved');
+    } catch (err) {
+      console.error('Save failed', err);
+      if (!writeFailedToasted) {
+        toast('Save failed: ' + (err && err.message ? err.message : err));
+        writeFailedToasted = true;
+      }
+    }
   }
 
   /* ---------- Mermaid (lazy-loaded from jsDelivr) ---------- */
@@ -1289,6 +1395,8 @@ body {
     currentPath = '';
     navStack = [];
     navIndex = -1;
+    currentFileHandle = null;
+    clearTimeout(saveTimer);
     revokeAssetUrls();
     updateBackBtn();
   }
@@ -1355,14 +1463,15 @@ body {
     if (!dirHandle) return false;
     const r = await resolveRelative(path);
     if (!r) { toast('File not found: ' + path); return false; }
-    let text;
+    let text, fh;
     try {
-      const fh = await r.dir.getFileHandle(r.name);
+      fh = await r.dir.getFileHandle(r.name);
       const file = await fh.getFile();
       text = await file.text();
     } catch { toast('Could not open ' + r.name); return false; }
     currentPath = r.fullPath;
     render(text, r.fullPath);
+    currentFileHandle = fh;
     await rewriteRelativeAssets();
     const hashIdx = path.indexOf('#');
     if (hashIdx >= 0) {
@@ -1503,6 +1612,7 @@ body {
         }
         if (handle && handle.kind === 'file') {
           clearFolderState();
+          currentFileHandle = handle;
           const file = await handle.getFile();
           readFile(file);
           return;
@@ -1567,6 +1677,7 @@ body {
         // If the OS handed us a directory, treat it as folder mode.
         if (fh.kind === 'directory') { await openFolderHandle(fh); return; }
         clearFolderState();
+        currentFileHandle = fh;
         const file = await fh.getFile();
         readFile(file);
       } catch (e) { console.error(e); }
